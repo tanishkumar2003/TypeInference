@@ -78,7 +78,59 @@ let string_of_subs (subs: substitutions) =
 |   on we will be working with these constraints from right to left.  |
 |*********************************************************************)
 let rec gen (env: environment) (e: expr): aexpr * typeScheme * (typeScheme * typeScheme) list =
-  raise UndefinedVar
+  match e with
+  | Int n -> AInt(n, TNum), TNum, []
+  | Bool b -> ABool(b, TBool), TBool, []
+  | String s -> AString(s, TStr), TStr, []
+  | ID x -> 
+      (match List.find_opt (fun (y, _) -> x = y) env with
+      | Some (_, t) -> AID(x, t), t, []
+      | None -> raise UndefinedVar)
+  | Fun(x, e1) ->
+      let a = gen_new_type() in
+      let b = gen_new_type() in
+      let ae1, t1, c1 = gen ((x, a) :: env) e1 in
+      AFun(x, ae1, TFun(a, b)), TFun(a, b), c1 @ [(t1, b)]
+  | Not e1 ->
+      let ae1, t1, c1 = gen env e1 in
+      ANot(ae1, TBool), TBool, c1 @ [(t1, TBool)]
+  | Binop(op, e1, e2) ->
+      let ae1, t1, c1 = gen env e1 in
+      let ae2, t2, c2 = gen env e2 in
+      match op with
+      | Add | Sub | Mult | Div ->
+          ABinop(op, ae1, ae2, TNum), TNum, 
+          c1 @ c2 @ [(t1, TNum); (t2, TNum)]
+      | Concat ->
+          ABinop(op, ae1, ae2, TStr), TStr,
+          c1 @ c2 @ [(t1, TStr); (t2, TStr)]
+      | Greater | Less | GreaterEqual | LessEqual | Equal | NotEqual ->
+          ABinop(op, ae1, ae2, TBool), TBool,
+          c1 @ c2 @ [(t1, t2)]
+      | Or | And ->
+          ABinop(op, ae1, ae2, TBool), TBool,
+          c1 @ c2 @ [(t1, TBool); (t2, TBool)]
+  | If(e1, e2, e3) ->
+      let ae1, t1, c1 = gen env e1 in
+      let ae2, t2, c2 = gen env e2 in
+      let ae3, t3, c3 = gen env e3 in
+      AIf(ae1, ae2, ae3, t2), t2,
+      c1 @ c2 @ c3 @ [(t1, TBool); (t2, t3)]
+  | FunctionCall(e1, e2) ->
+      let ae1, t1, c1 = gen env e1 in
+      let ae2, t2, c2 = gen env e2 in
+      let a = gen_new_type() in
+      AFunctionCall(ae1, ae2, a), a,
+      c1 @ c2 @ [(t1, TFun(t2, a))]
+  | Let(x, false, e1, e2) ->
+      let ae1, t1, c1 = gen env e1 in
+      let ae2, t2, c2 = gen ((x, t1) :: env) e2 in
+      ALet(x, false, ae1, ae2, t2), t2, c1 @ c2
+  | Let(x, true, e1, e2) ->
+      let a = gen_new_type() in
+      let ae1, t1, c1 = gen ((x, a) :: env) e1 in
+      let ae2, t2, c2 = gen ((x, t1) :: env) e2 in
+      ALet(x, true, ae1, ae2, t2), t2, c1 @ [(a, t1)] @ c2
 
 
 (******************************************************************|
@@ -135,6 +187,12 @@ let apply (subs: substitutions) (t: typeScheme) : typeScheme =
   List.fold_right (fun (x, u) t -> substitute u x t) subs t
 ;;
 
+(* Helper function to check if type variable occurs in type *)
+let rec occurs (x: string) (t: typeScheme) : bool =
+  match t with
+  | TNum | TBool | TStr -> false
+  | T(y) -> x = y
+  | TFun(t1, t2) -> occurs x t1 || occurs x t2
 
 (******************************************************************|
 |***************************   Unify   ****************************|
@@ -196,7 +254,9 @@ let rec unify (constraints: (typeScheme * typeScheme) list) : substitutions =
 and unify_one (t1: typeScheme) (t2: typeScheme) : substitutions =
   match t1, t2 with
   | TNum, TNum | TBool, TBool | TStr, TStr -> []
-  | T(x), z | z, T(x) -> [(x, z)]
+  | T(x), z | z, T(x) -> 
+      if occurs x z then raise OccursCheckException
+      else [(x, z)]
   | TFun(a, b), TFun(x, y) -> unify [(a, x); (b, y)]
   | _ -> raise (failwith "mismatched types")
 ;;
