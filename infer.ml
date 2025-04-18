@@ -97,7 +97,7 @@ let rec gen (env: environment) (e: expr): aexpr * typeScheme * (typeScheme * typ
   | Binop(op, e1, e2) ->
       let ae1, t1, c1 = gen env e1 in
       let ae2, t2, c2 = gen env e2 in
-      match op with
+      (match op with
       | Add | Sub | Mult | Div ->
           ABinop(op, ae1, ae2, TNum), TNum, 
           c1 @ c2 @ [(t1, TNum); (t2, TNum)]
@@ -109,17 +109,17 @@ let rec gen (env: environment) (e: expr): aexpr * typeScheme * (typeScheme * typ
           c1 @ c2 @ [(t1, t2)]
       | Or | And ->
           ABinop(op, ae1, ae2, TBool), TBool,
-          c1 @ c2 @ [(t1, TBool); (t2, TBool)]
+          c1 @ c2 @ [(t1, TBool); (t2, TBool)])
   | If(e1, e2, e3) ->
       let ae1, t1, c1 = gen env e1 in
-      let ae2, t2, c2 = gen env e2 in
+      let ae2, t2, c2 = gen env e2 in 
       let ae3, t3, c3 = gen env e3 in
       AIf(ae1, ae2, ae3, t2), t2,
       c1 @ c2 @ c3 @ [(t1, TBool); (t2, t3)]
   | FunctionCall(e1, e2) ->
       let ae1, t1, c1 = gen env e1 in
       let ae2, t2, c2 = gen env e2 in
-      let a = gen_new_type() in
+      let a = gen_new_type() in 
       AFunctionCall(ae1, ae2, a), a,
       c1 @ c2 @ [(t1, TFun(t2, a))]
   | Let(x, false, e1, e2) ->
