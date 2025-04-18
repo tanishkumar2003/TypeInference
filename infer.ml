@@ -194,52 +194,39 @@ let rec occurs (x: string) (t: typeScheme) : bool =
   | T(y) -> x = y
   | TFun(t1, t2) -> occurs x t1 || occurs x t2
 
-(* Helper to get all substitutions for a type variable *)
+(* Helper to get all substitutions for a type variable - improved version *)
 let rec get_concrete_type subs t =
-  match t with
-  | T(x) -> 
-      (match List.find_opt (fun (y, _) -> x = y) subs with
-       | Some (_, t') -> get_concrete_type subs t'
-       | None -> t)
-  | TFun(t1, t2) -> TFun(get_concrete_type subs t1, get_concrete_type subs t2)
-  | _ -> t
+  let rec follow_chain seen t =
+    match t with
+    | T(x) when List.mem x seen -> t  (* Avoid cycles *)
+    | T(x) -> 
+        (match List.find_opt (fun (y, _) -> x = y) subs with
+         | Some (_, t') -> follow_chain (x :: seen) t'
+         | None -> t)
+    | TFun(t1, t2) -> TFun(follow_chain seen t1, follow_chain seen t2)
+    | _ -> t
+  in follow_chain [] t
 
-(* Helper to simplify substitutions *)
+(* Composition of substitutions *)
+let compose_subs s1 s2 =
+  let apply_s1 = List.map (fun (x, t) -> (x, apply s1 t)) s2 in
+  let s1_filtered = List.filter (fun (x, _) -> 
+    not (List.exists (fun (y, _) -> x = y) s2)) s1 in
+  apply_s1 @ s1_filtered
+
+(* Helper to simplify substitutions - improved version *)
 let optimize_subs subs =
   let rec aux acc = function
     | [] -> acc
     | (x, t) :: rest ->
-        let t' = get_concrete_type acc t in
-        aux ((x, t') :: acc) rest
+        let t' = get_concrete_type acc (get_concrete_type rest t) in
+        if occurs x t' then raise OccursCheckException
+        else aux ((x, t') :: acc) rest
   in
-  aux [] (List.rev subs)
+  let optimized = aux [] (List.rev subs) in
+  (* Second pass to ensure all types are fully concrete *)
+  List.map (fun (x, t) -> (x, get_concrete_type optimized t)) optimized
 
-(******************************************************************|
-|***************************   Unify   ****************************|
-|******************************************************************|
-| Arguments:                                                       |
-|   constraints -> list of constraints (tuple of 2 types)          |
-|******************************************************************|
-| Returns:                                                         |
-|   returns a list of substitutions                                |
-|******************************************************************|
-| - The unify function takes a bunch of constraints it obtained    |
-|   from the collect method and turns them into substitutions.     |
-| - It is crucial to remember that these constraints are dependent |
-|   on each other, therefore we have separate function unify_one   |
-|   and unify.                                                     |
-| - Since constraints on the right have more precedence we start   |
-|   from the rightmost constraint and unify it by calling the      |
-|   unify_one function. unify_one transforms the constraint to a   |
-|   substitution. More details given below.                        |
-| - Now these substitutions will be applied to both types of the   |
-|   second rightmost constraint following which they will be       |
-|   unified by again calling the unify_one function.               |
-| - This process of unification(unify_one) and substitution(apply) |
-|   goes on till all the constraints have been accounted for.      |
-| - In the end we get a complete list of substitutions that helps  |
-|   resolve types of all expressions in our program.               |
-|******************************************************************)
 let rec unify (constraints: (typeScheme * typeScheme) list) : substitutions =
   match constraints with
   | [] -> []
@@ -248,7 +235,7 @@ let rec unify (constraints: (typeScheme * typeScheme) list) : substitutions =
     let x' = apply t2 x in
     let y' = apply t2 y in
     let t1 = unify_one x' y' in
-    optimize_subs (t1 @ t2)
+    optimize_subs (compose_subs t1 t2)
 
 and unify_one (t1: typeScheme) (t2: typeScheme) : substitutions =
   match t1, t2 with
@@ -256,9 +243,11 @@ and unify_one (t1: typeScheme) (t2: typeScheme) : substitutions =
   | T(x), z | z, T(x) -> 
       if occurs x z then raise OccursCheckException
       else [(x, z)]
-  | TFun(a, b), TFun(x, y) -> unify [(a, x); (b, y)]
+  | TFun(a, b), TFun(x, y) -> 
+      let s1 = unify [(a, x)] in
+      let s2 = unify [((apply s1 b), (apply s1 y))] in
+      compose_subs s2 s1
   | _ -> raise (failwith "mismatched types")
-;;
 
 (* applies a final set of substitutions on the annotated expr *)
 let rec apply_expr (subs: substitutions) (ae: aexpr): aexpr =
