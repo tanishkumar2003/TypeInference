@@ -194,6 +194,26 @@ let rec occurs (x: string) (t: typeScheme) : bool =
   | T(y) -> x = y
   | TFun(t1, t2) -> occurs x t1 || occurs x t2
 
+(* Helper to get all substitutions for a type variable *)
+let rec get_concrete_type subs t =
+  match t with
+  | T(x) -> 
+      (match List.find_opt (fun (y, _) -> x = y) subs with
+       | Some (_, t') -> get_concrete_type subs t'
+       | None -> t)
+  | TFun(t1, t2) -> TFun(get_concrete_type subs t1, get_concrete_type subs t2)
+  | _ -> t
+
+(* Helper to simplify substitutions *)
+let optimize_subs subs =
+  let rec aux acc = function
+    | [] -> acc
+    | (x, t) :: rest ->
+        let t' = get_concrete_type acc t in
+        aux ((x, t') :: acc) rest
+  in
+  aux [] (List.rev subs)
+
 (******************************************************************|
 |***************************   Unify   ****************************|
 |******************************************************************|
@@ -224,33 +244,12 @@ let rec unify (constraints: (typeScheme * typeScheme) list) : substitutions =
   match constraints with
   | [] -> []
   | (x, y) :: xs ->
-    (* generate substitutions of the rest of the list *)
     let t2 = unify xs in
-    (* resolve the LHS and RHS of the constraints from the previous substitutions *)
-    let t1 = unify_one (apply t2 x) (apply t2 y) in
-    t1 @ t2
+    let x' = apply t2 x in
+    let y' = apply t2 y in
+    let t1 = unify_one x' y' in
+    optimize_subs (t1 @ t2)
 
-(******************************************************************|
-|*************************   Unify One  ***************************|
-|******************************************************************|
-| Arguments:                                                       |
-|   t1, t2 -> two types (one pair) that need to be unified.        |
-|******************************************************************|
-| Returns:                                                         |
-|   returns a substitution rule for the two types if one of them   |
-|   is a parameterized type else nothing.                          |
-|******************************************************************|
-| - A constraint is converted to a substitution here.              |
-| - As mentioned several times before a substitution is nothing    |
-|   but a resolution rule for a type placeholder.                  |
-| - If a constraint yields multiple type resolutions then the      |
-|   resolutions should be broken up into a list of constraints and |
-|   be passed to the unify function.                               |
-| - If both types are concrete then we need not create a new       |
-|   substitution rule.                                             |
-| - If the types are concrete but don't match then that indicates  |
-|   a type mismatch.                                               |
-|******************************************************************)
 and unify_one (t1: typeScheme) (t2: typeScheme) : substitutions =
   match t1, t2 with
   | TNum, TNum | TBool, TBool | TStr, TStr -> []
